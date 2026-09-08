@@ -1,0 +1,9 @@
+google-antigravity
+tree-sitter
+tree-sitter-python
+qdrant-client
+fastembed
+fastapi
+uvicorn
+streamlit
+pydantic
