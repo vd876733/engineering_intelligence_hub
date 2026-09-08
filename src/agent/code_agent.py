@@ -11,15 +11,8 @@ import logging
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 
-# Load environment variables from .env before accessing any env var.
-load_dotenv()
-
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    raise ValueError("GEMINI_API_KEY is missing from environment variables.")
-
 import google.genai as genai
-from google.genai.errors import ClientError
+from google.genai.errors import APIError, ClientError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -29,7 +22,30 @@ from tenacity import (
 )
 from src.db.vector_store import CodeVectorStore
 
+# ---------------------------------------------------------------------------
+# 1. Load .env first so shell-level vars always override the file.
+# ---------------------------------------------------------------------------
+load_dotenv()
+
+# 2. Read and sanitise the key (strip stray quotes or whitespace).
+api_key = os.getenv("GEMINI_API_KEY", "").strip("'\" ")
+
+# 3. Validate format — Google AI Studio keys always start with 'AIzaSy'.
+if not api_key:
+    raise ValueError(
+        "GEMINI_API_KEY is missing from environment variables. "
+        "Add it to your .env file: GEMINI_API_KEY=AIzaSy..."
+    )
+if not api_key.startswith("AIzaSy"):
+    raise ValueError(
+        f"GEMINI_API_KEY appears invalid (got prefix '{api_key[:8]}...'). "
+        "Google AI Studio API keys must start with 'AIzaSy'. "
+        "Generate a valid key at https://aistudio.google.com/app/apikey "
+        "and update your .env file."
+    )
+
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Gemini client — authenticates with the key loaded from the environment.
@@ -56,14 +72,9 @@ _RETRY_WAIT_SECONDS = 15
 _MAX_ATTEMPTS = 3
 
 
-def _is_rate_limit(exc: BaseException) -> bool:
-    """Return True only for HTTP 429 responses."""
-    return isinstance(exc, ClientError) and exc.code == 429
-
-
 @retry(
     reraise=True,
-    retry=retry_if_exception_type(ClientError),
+    retry=retry_if_exception_type(APIError),   # covers 429, 500, 503, etc.
     wait=wait_fixed(_RETRY_WAIT_SECONDS),
     stop=stop_after_attempt(_MAX_ATTEMPTS),
     before_sleep=before_sleep_log(logger, logging.WARNING),
@@ -71,7 +82,7 @@ def _is_rate_limit(exc: BaseException) -> bool:
 def _generate_with_retry(prompt: str) -> str:
     """
     Calls the Gemini generate_content API.
-    Tenacity wraps this synchronous call and retries on ClientError (429).
+    Tenacity retries on any APIError (429 rate limit, 5xx server errors).
     """
     response = _client.models.generate_content(
         model=_MODEL,
