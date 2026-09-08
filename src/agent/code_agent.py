@@ -26,7 +26,12 @@ if not api_key:
     )
 
 # ---------------------------------------------------------------------------
-# 3. Third-party imports (after key is confirmed present).
+# 3. Force standard API-key auth — disable Vertex AI / OAuth token modes.
+# ---------------------------------------------------------------------------
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "False"
+
+# ---------------------------------------------------------------------------
+# 4. Third-party imports (after key is confirmed present and mode is set).
 # ---------------------------------------------------------------------------
 import google.genai as genai
 from google.genai.errors import APIError
@@ -42,9 +47,9 @@ from src.db.vector_store import CodeVectorStore
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# 4. Initialise the Gemini client with the API key.
+# 5. Initialise the Gemini client in standard API-key mode (not Vertex AI).
 # ---------------------------------------------------------------------------
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=api_key, vertexai=False)
 
 _MODEL = "gemini-2.5-flash"
 
