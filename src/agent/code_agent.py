@@ -1,8 +1,9 @@
 """
-code_agent.py - RAG Orchestrator using the google-antigravity SDK.
+code_agent.py - RAG Orchestrator using the Google GenAI SDK (google-genai).
 
-This module sets up the Agent with system instructions and exposes
-the main execution pipeline for answering code-related questions.
+This module initialises the Gemini client, builds context-augmented prompts
+from retrieved AST chunks, and exposes the main execution pipeline for
+answering code-related questions.
 """
 
 import os
@@ -17,8 +18,8 @@ api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise ValueError("GEMINI_API_KEY is missing from environment variables.")
 
-from google.antigravity import Agent, LocalAgentConfig
-from google.api_core.exceptions import ResourceExhausted
+import google.genai as genai
+from google.genai.errors import ClientError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -30,45 +31,65 @@ from src.db.vector_store import CodeVectorStore
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Gemini client — authenticates with the key loaded from the environment.
+# ---------------------------------------------------------------------------
+_client = genai.Client(api_key=api_key)
+
+_MODEL = "gemini-2.5-flash"
+
+_SYSTEM_INSTRUCTION = (
+    "You are an expert software architect. "
+    "Use the provided code context to answer the user's questions accurately. "
+    "Always reference the file paths and line numbers when discussing the code."
+)
+
 # In-memory vector store instance (to be populated during app startup)
 VECTOR_STORE = CodeVectorStore()
 
 __all__ = ["VECTOR_STORE", "get_agent_response"]
 
-# Use gemini-2.5-flash: higher free-tier RPM ceiling than 1.5-flash / 3.8-flash.
-_CONFIG = LocalAgentConfig(
-    model="gemini-2.5-flash",
-    system_instruction=(
-        "You are an expert software architect. "
-        "Use the provided code context to answer the user's questions accurately. "
-        "Always reference the file paths and line numbers when discussing the code."
-    ),
-)
-
 # ---------------------------------------------------------------------------
-# Retry helper — catches 429 ResourceExhausted, waits 15 s, retries up to 3x.
+# Retry helper — catches 429 ClientError, waits 15 s, retries up to 3 times.
 # ---------------------------------------------------------------------------
 _RETRY_WAIT_SECONDS = 15
 _MAX_ATTEMPTS = 3
 
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    """Return True only for HTTP 429 responses."""
+    return isinstance(exc, ClientError) and exc.code == 429
+
+
 @retry(
     reraise=True,
-    retry=retry_if_exception_type(ResourceExhausted),
+    retry=retry_if_exception_type(ClientError),
     wait=wait_fixed(_RETRY_WAIT_SECONDS),
     stop=stop_after_attempt(_MAX_ATTEMPTS),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
-async def _call_agent_with_retry(agent: Agent, prompt: str) -> str:
-    """Inner call isolated so tenacity can wrap only the network hop."""
-    response = await agent.chat(prompt)
-    return await response.text()
+def _generate_with_retry(prompt: str) -> str:
+    """
+    Calls the Gemini generate_content API.
+    Tenacity wraps this synchronous call and retries on ClientError (429).
+    """
+    response = _client.models.generate_content(
+        model=_MODEL,
+        contents=prompt,
+        config=genai.types.GenerateContentConfig(
+            system_instruction=_SYSTEM_INSTRUCTION,
+            temperature=0.2,
+        ),
+    )
+    return response.text
+
 
 async def get_agent_response(prompt: str, repo_context: List[Dict[str, Any]]) -> str:
     """
-    Executes a chat turn with the google-antigravity SDK.
-    Uses an async context manager and the `chat()` API.
+    Builds a context-augmented prompt from retrieved AST chunks and calls
+    the Gemini API via the google-genai SDK.
     """
-    # Construct a context-augmented prompt
+    # 1. Build the context block from retrieved code chunks.
     context_parts = []
     for r in repo_context:
         path = r.get("file_path", "unknown")
@@ -82,8 +103,11 @@ async def get_agent_response(prompt: str, repo_context: List[Dict[str, Any]]) ->
             f"```python\n{snippet}\n```"
         )
 
-    context_str = "\n\n".join(context_parts) if context_parts else "No relevant code context found."
+    context_str = (
+        "\n\n".join(context_parts) if context_parts else "No relevant code context found."
+    )
 
+    # 2. Compose the final prompt.
     final_prompt = (
         f"Here is some relevant context from the codebase:\n\n"
         f"{context_str}\n\n"
@@ -91,7 +115,5 @@ async def get_agent_response(prompt: str, repo_context: List[Dict[str, Any]]) ->
         f"Please provide your answer based on the context above."
     )
 
-    # Pass the prompt to the google.antigravity.Agent.
-    # _call_agent_with_retry will automatically back off on 429s.
-    async with Agent(config=_CONFIG) as agent:
-        return await _call_agent_with_retry(agent, final_prompt)
+    # 3. Call the API — _generate_with_retry backs off automatically on 429s.
+    return _generate_with_retry(final_prompt)

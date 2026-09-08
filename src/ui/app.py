@@ -18,7 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')
 
 from src.parser.ast_chunker import parse_repository
 from src.agent.code_agent import VECTOR_STORE, get_agent_response
-from google.api_core.exceptions import ResourceExhausted
+from google.genai.errors import ClientError
 import asyncio
 
 st.set_page_config(page_title="Engineering Intelligence Hub", page_icon="🧠", layout="wide")
@@ -323,13 +323,17 @@ if prompt := st.chat_input("Ask a question about the codebase..."):
         try:
             full_response = asyncio.run(get_agent_response(prompt, context_data))
             st.markdown(f'<div class="agent-explanation">{full_response}</div>', unsafe_allow_html=True)
-        except ResourceExhausted:
-            full_response = (
-                "⚠️ **Rate limit reached (429).** "
-                "The free-tier allows only a few requests per minute. "
-                "Please wait **15–60 seconds** and try again."
-            )
-            st.warning(full_response, icon="⏳")
+        except ClientError as e:
+            if e.code == 429:
+                full_response = (
+                    "⚠️ **Rate limit reached (429).** "
+                    "The free-tier allows only a few requests per minute. "
+                    "Please wait **15–60 seconds** and try again."
+                )
+                st.warning(full_response, icon="⏳")
+            else:
+                full_response = f"API error ({e.code}): {str(e)}"
+                st.error(full_response)
         except Exception as e:
             full_response = f"I encountered an error while communicating with the agent: {str(e)}"
             st.error(full_response)
