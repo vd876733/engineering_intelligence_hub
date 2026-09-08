@@ -338,6 +338,9 @@ if prompt := st.chat_input("Ask a question about the codebase..."):
             else:
                 full_response = f"API error ({e.code}): {str(e)}"
                 st.error(full_response)
+        except APIError as e:
+            full_response = f"API error: {str(e)}"
+            st.error(full_response)
         except Exception as e:
             full_response = f"I encountered an error while communicating with the agent: {str(e)}"
             st.error(full_response)
