@@ -4,21 +4,25 @@ import streamlit as st
 import time
 
 # --- API Key Bootstrap ---
-# Load .env before any other import so the key is available to all modules.
+# load_dotenv() MUST run before any os.getenv() or module import that reads env vars.
 from dotenv import load_dotenv
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GEMINI_API_KEY", "").strip("'\" ")
 if not api_key:
-    raise ValueError("GEMINI_API_KEY is missing from environment variables.")
+    st.error(
+        "GEMINI_API_KEY is not configured in environment variables or .env file. "
+        "Add it to your .env file:\n\n  GEMINI_API_KEY=<your-key>"
+    )
+    st.stop()   # Halt rendering gracefully; no Python traceback shown to the user.
 
 # Ensure src modules are in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.parser.ast_chunker import parse_repository
 from src.agent.code_agent import VECTOR_STORE, get_agent_response
-from google.genai.errors import ClientError
+from google.genai.errors import APIError, ClientError
 import asyncio
 
 st.set_page_config(page_title="Engineering Intelligence Hub", page_icon="🧠", layout="wide")
