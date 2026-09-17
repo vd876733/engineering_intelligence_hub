@@ -46,10 +46,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 client = genai.Client(
     api_key=api_key,
-    http_options={'headers': {'x-goog-api-key': api_key}}
+    http_options=genai.types.HttpOptions(
+        headers={'x-goog-api-key': api_key}
+    )
 )
 
-_MODEL = "gemini-2.5-flash"
+_MODEL = "gemini-3.6-flash"
 
 _SYSTEM_INSTRUCTION = (
     "You are an expert software architect. "
